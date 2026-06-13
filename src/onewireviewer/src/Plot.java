@@ -31,6 +31,8 @@ import java.awt.*;
 import java.awt.event.*;
 import java.awt.image.*;
 import java.awt.datatransfer.*;
+import java.io.*;
+import javax.swing.filechooser.FileNameExtensionFilter;
 
 /**
  * A 2D plot used for plotting temperatures.  The Y-Axis is labeled, but
@@ -81,8 +83,15 @@ public class Plot extends JPanel
    /** Strokes used for drawing the grid on the plot */
    private BasicStroke dashed = null, normal = null;
    /** for formating numeric strings */
-   private static final java.text.NumberFormat nf = 
+   private static final java.text.NumberFormat nf =
       new java.text.DecimalFormat();
+   /** for formatting numeric strings for clipboard/CSV export; always uses
+       a '.' decimal separator and no grouping, independent of the system
+       locale, so exported values are never ambiguous with the ',' field
+       separator */
+   private static final java.text.DecimalFormat exportNf =
+      new java.text.DecimalFormat("0.###",
+         new java.text.DecimalFormatSymbols(java.util.Locale.US));
 
    /** context-menu for pop-up, allows copying data to the scratchpad */
    private JPopupMenu data = null;
@@ -139,9 +148,14 @@ public class Plot extends JPanel
       JMenuItem rescale = new JMenuItem("Rescale Graph");
       rescale.setActionCommand("RescaleGraph");
       rescale.addActionListener(this);
+      // save data directly to a CSV file
+      JMenuItem saveCsv = new JMenuItem("Save Data to CSV File...");
+      saveCsv.setActionCommand("SaveCSV");
+      saveCsv.addActionListener(this);
       data.add(copyDataComma);
       data.add(copyDataLabel);
       data.add(copyData);
+      data.add(saveCsv);
       data.add(rescale);
       this.add(data);
 
@@ -159,13 +173,15 @@ public class Plot extends JPanel
       int currIndex = pointIndex;
       double[] currPoints = points;
       String[] currPointsLabel = pointsLabel;
-      int oldMaxFractionDigits = nf.getMaximumFractionDigits();
-      nf.setMaximumFractionDigits(3);
       if(currIndex>0)
       {
          if(ae.getActionCommand().equals("RescaleGraph"))
          {
             this.recalculateScale();
+         }
+         else if(ae.getActionCommand().equals("SaveCSV"))
+         {
+            saveToCSV(currIndex, currPoints, currPointsLabel);
          }
          else
          {
@@ -174,7 +190,7 @@ public class Plot extends JPanel
             {
                for(int i=0; i<currIndex; i++)
                {
-                  sb.append(nf.format(currPoints[i]));
+                  sb.append(exportNf.format(currPoints[i]));
                   sb.append("\n");
                }
             }
@@ -184,17 +200,17 @@ public class Plot extends JPanel
                {
                   sb.append(currPointsLabel[i]);
                   sb.append(',');
-                  sb.append(nf.format(currPoints[i]));
+                  sb.append(exportNf.format(currPoints[i]));
                   sb.append("\n");
                }
             }
             else if(ae.getActionCommand().equals("CopyComma"))
             {
-               sb.append(nf.format(currPoints[0]));
+               sb.append(exportNf.format(currPoints[0]));
                for(int i=1; i<currIndex; i++)
                {
                   sb.append(",");
-                  sb.append(nf.format(currPoints[i]));
+                  sb.append(exportNf.format(currPoints[i]));
                }
             }
             StringSelection ss = new StringSelection(sb.toString());
@@ -202,7 +218,79 @@ public class Plot extends JPanel
             tk.getSystemClipboard().setContents(ss, ss);
          }
       }
-      nf.setMaximumFractionDigits(oldMaxFractionDigits);
+   }
+
+   /**
+    * Writes the plotted data to a user-chosen CSV file.  The file has a
+    * <code>Timestamp,Unit,Temperature</code> header followed by one row per
+    * point.  Each point's label is split on its last comma into a timestamp
+    * and a unit (e.g. <code>"6/13/26 14:30:00,F"</code>); labels without a
+    * comma are treated as a timestamp with an empty unit.  The timestamp cell
+    * is always quoted so a comma inside a locale's date format cannot corrupt
+    * the columns, and temperatures are written with a '.' decimal separator.
+    *
+    * @param currIndex       the number of valid points
+    * @param currPoints      the temperature values
+    * @param currPointsLabel the label (timestamp + unit) for each point
+    */
+   private void saveToCSV(int currIndex, double[] currPoints,
+                          String[] currPointsLabel)
+   {
+      JFileChooser chooser = new JFileChooser();
+      chooser.setDialogTitle("Save Data to CSV File");
+      chooser.setFileFilter(
+         new FileNameExtensionFilter("CSV files (*.csv)", "csv"));
+      if(chooser.showSaveDialog(this) != JFileChooser.APPROVE_OPTION)
+         return;
+
+      File file = chooser.getSelectedFile();
+      if(!file.getName().toLowerCase().endsWith(".csv"))
+         file = new File(file.getParentFile(), file.getName() + ".csv");
+
+      BufferedWriter out = null;
+      try
+      {
+         out = new BufferedWriter(new FileWriter(file));
+         out.write("Timestamp,Unit,Temperature");
+         out.newLine();
+         for(int i=0; i<currIndex; i++)
+         {
+            String label = currPointsLabel[i];
+            String timestamp = (label == null) ? "" : label;
+            String unit = "";
+            if(label != null)
+            {
+               int comma = label.lastIndexOf(',');
+               if(comma >= 0)
+               {
+                  timestamp = label.substring(0, comma);
+                  unit = label.substring(comma + 1);
+               }
+            }
+            // quote the timestamp (doubling any embedded quote) so a comma in
+            // the date string cannot break the column layout
+            out.write('"' + timestamp.replace("\"", "\"\"") + '"');
+            out.write(',');
+            out.write(unit);
+            out.write(',');
+            out.write(exportNf.format(currPoints[i]));
+            out.newLine();
+         }
+      }
+      catch(IOException ioe)
+      {
+         JOptionPane.showMessageDialog(this,
+            "Could not save CSV file:\n" + ioe.getMessage(),
+            "Save Error", JOptionPane.ERROR_MESSAGE);
+      }
+      finally
+      {
+         if(out != null)
+         {
+            try { out.close(); }
+            catch(IOException ignore) { }
+         }
+      }
    }
 
    /**
